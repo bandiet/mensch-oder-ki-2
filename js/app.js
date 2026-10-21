@@ -1,0 +1,1217 @@
+/* ------------------------------------------------------------
+   Mensch oder KI? 2.0 — im Format der Phishing Challenge 2.0
+   Start (Titel, Welle, fliegende Symbole) → Intro ohne Stimme
+   (Deepfake-Werkbank) → Level 1 (Audioanrufe) → Level-Auswertung
+   → Sicherheitstipp → Level 2 (Videoanrufe) → Level-Auswertung
+   → Auswertung. Punkte = die Beute des Hackers (je weniger, desto besser).
+   Jeder Anruf: Lage → Stille → Klingeln → Gespräch (zwei
+   Wahlrunden) → Urteil im Panel → Feedback (Kernsatz + antippbare Signale).
+   Sprünge zum Testen: #intro, #l1, #l2, #anruf1 … #anruf6, #e1, #e2, #pause, #ende
+   ------------------------------------------------------------ */
+(function () {
+  const C = window.CONTENT;
+  const K = window.Klang;
+  const $ = id => document.getElementById(id);
+  const app = $('app');
+  const ohneTags = t => t.replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+  const euro = n => n.toLocaleString('de-DE') + ' €';
+  const warte = ms => new Promise(r => setTimeout(r, ms));
+  const reduziert = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  const S = {
+    i: 0, level: 0, ergebnisse: [], beute: 0, pause: null, pauseFertig: false,
+    cc: true, lauf: null, epoche: 0
+  };
+  const f = (t, w) => String(t).replace(/\{(\w+)\}/g, (m, k) => (w && k in w ? w[k] : m));
+
+  /* ================= Level ================= */
+  const LV = C.levels;
+  const lvStart = l => LV.slice(0, l).reduce((n, x) => n + x.anzahl, 0);
+  const levelVon = i => { let n = 0; for (let l = 0; l < LV.length; l++) { n += LV[l].anzahl; if (i < n) return l; } return LV.length - 1; };
+  const istRichtig = e => !!(e && e.richtig && !e.zuSpaet);
+
+  /* ================= Bildschirme ================= */
+  function zeige(id) {
+    document.querySelectorAll('.screen').forEach(s => {
+      const an = s.id === id;
+      if (an && s.hidden) { s.classList.remove('rein'); void s.offsetWidth; s.classList.add('rein'); }
+      s.hidden = !an;
+      if (an) s.scrollTop = 0;
+    });
+    app.dataset.screen = id;
+    hudSichtbar();
+  }
+
+  const ICONS = {
+    'phone-off': '<path d="M3.5 13.6c4.7-4.1 12.3-4.1 17 0l-1.8 2.5c-.4.5-1.1.6-1.6.3l-2.2-1.3c-.4-.2-.6-.7-.5-1.1l.3-1.6a10.6 10.6 0 0 0-5.4 0l.3 1.6c.1.4-.1.9-.5 1.1l-2.2 1.3c-.5.3-1.2.2-1.6-.3z"/>',
+    'phone-out': '<path d="M6.6 3.2 8.8 5c.4.3.5.9.3 1.4L8 8.8a12 12 0 0 0 7.2 7.2l2.4-1.1c.5-.2 1-.1 1.4.3l1.8 2.2c.4.5.3 1.2-.2 1.6l-1.6 1.3c-.9.7-2.1.9-3.1.5A18.4 18.4 0 0 1 3.2 8.2c-.4-1-.2-2.2.5-3.1L5 3.4c.4-.5 1.1-.6 1.6-.2z"/><path d="M15 3h6v6M21 3l-6 6"/>',
+    key: '<circle cx="8" cy="15" r="4.5"/><path d="m11.2 11.8 8.8-8.8M17 6l2.5 2.5M14.5 8.5 16.5 10.5"/>',
+    frage: '<path d="M4 5h16v11H9l-5 4z"/><path d="M10 9a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6.9v.4M12 13.8h.01"/>',
+    kamera: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/>',
+    rueckruf: '<path d="M6.6 3.2 8.8 5c.4.3.5.9.3 1.4L8 8.8a12 12 0 0 0 7.2 7.2l2.4-1.1c.5-.2 1-.1 1.4.3l1.8 2.2c.4.5.3 1.2-.2 1.6l-1.6 1.3c-.9.7-2.1.9-3.1.5A18.4 18.4 0 0 1 3.2 8.2c-.4-1-.2-2.2.5-3.1L5 3.4c.4-.5 1.1-.6 1.6-.2z"/><path d="M15 3h6v6M21 3l-6 6"/>',
+    display: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M9 7h6M9 10.5h4M11 18h2"/>'
+  };
+  const icon = (n, cls) => `<svg class="ico ${cls || ''}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+  const HOERER = 'M6.6 3.2 8.8 5c.4.3.5.9.3 1.4L8 8.8a12 12 0 0 0 7.2 7.2l2.4-1.1c.5-.2 1-.1 1.4.3l1.8 2.2c.4.5.3 1.2-.2 1.6l-1.6 1.3c-.9.7-2.1.9-3.1.5A18.4 18.4 0 0 1 3.2 8.2c-.4-1-.2-2.2.5-3.1L5 3.4c.4-.5 1.1-.6 1.6-.2z';
+  const PFEIL = '<svg class="ico pfeil" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+  const NOCHMAL = '<svg class="ico" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4"/></svg>';
+  const HAKEN = '<svg class="ico" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
+  const KREUZ = '<svg class="ico" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>';
+  // Bildsymbole im Stil der Phishing Challenge (Kachel mit Verlauf, weiße Form)
+  const BILD = {
+    telefon: (id = 'bt') => `<svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF4F86"/><stop offset="1" stop-color="#8F2BC9"/></linearGradient></defs>
+      <rect width="120" height="120" rx="30" fill="url(#${id})"/><path d="${HOERER}" transform="translate(27 29) scale(2.55)" fill="#fff"/>
+      <path d="M76 30a17 17 0 0 1 14 14M77 18a29 29 0 0 1 25 25" fill="none" stroke="#17FFC0" stroke-width="6" stroke-linecap="round"/></svg>`,
+    video: (id = 'bv') => `<svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6A86FF"/><stop offset="1" stop-color="#8F2BC9"/></linearGradient></defs>
+      <rect width="120" height="120" rx="30" fill="url(#${id})"/><rect x="20" y="38" width="56" height="44" rx="10" fill="#fff"/><path d="M80 52 100 40v40L80 68Z" fill="#fff"/>
+      <circle cx="33" cy="50" r="5" fill="#FF2D87"/><path d="M38 66c4-6 16-6 20 0" fill="none" stroke="#8F2BC9" stroke-width="4" stroke-linecap="round"/><circle cx="48" cy="56" r="5" fill="#8F2BC9"/></svg>`,
+    welle: `<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30" fill="#2B2963" stroke="#4B47A0" stroke-width="2"/>
+      <g stroke="#17FFC0" stroke-width="4.5" stroke-linecap="round"><path d="M16 28v8M24 22v20M32 16v32M40 24v16M48 29v6"/></g></svg>`,
+    mikro: `<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30" fill="#2B2963" stroke="#4B47A0" stroke-width="2"/>
+      <rect x="25" y="14" width="14" height="24" rx="7" fill="#FF8278"/><path d="M19 32a13 13 0 0 0 26 0M32 45v6M25 51h14" fill="none" stroke="#FF8278" stroke-width="4" stroke-linecap="round"/></svg>`,
+    warnung: `<svg viewBox="0 0 64 58" aria-hidden="true"><path d="M32 6 58 52H6Z" fill="#FFCF4A" stroke="#FFCF4A" stroke-width="8" stroke-linejoin="round"/><path d="M32 22v14M32 43v.5" stroke="#3B2B00" stroke-width="6" stroke-linecap="round"/></svg>`
+  };
+  const chipHoerer = `<svg class="ico" viewBox="0 0 24 24"><path d="${HOERER}"/></svg>`;
+
+  // Start: Flug durch den Raum wie in der Phishing Challenge – Symbole tauchen klein rund um den Text auf
+  // und gleiten langsam nach außen, dazu ein paar Sterne für die Tiefe.
+  function sternenflug() {
+    const teile = [
+      [BILD.telefon('sft'), -1, -.32], [BILD.welle, 1, -.42], [BILD.warnung, -.92, .5],
+      [BILD.video('sfv'), .95, .38], [`<img class="flieg-gesicht" src="${C.intro.foto}" alt="">`, -.45, -1], [BILD.mikro, .5, -1],
+      [`<span class="sw-chip">${chipHoerer}+49 157 3308 1146</span>`, 1, .02], [`<span class="sw-chip mint"><i class="rec-dot"></i>REC 00:03</span>`, -1, .08]
+    ];
+    const dauer = 15, n = teile.length;
+    const symbole = teile.map(([h, x, y], i) => {
+      const l = Math.hypot(x, y);
+      return `<div class="flieg" style="--dx:${(x / l).toFixed(3)};--dy:${(y / l).toFixed(3)};--t:${dauer}s;--d:${(-i * dauer / n - 1).toFixed(2)}s;--r0:${((i % 2 ? 1 : -1) * 8)}deg">${h}</div>`;
+    }).join('');
+    let sterne = '';
+    for (let i = 0; i < 22; i++) {
+      const w = (i / 22) * Math.PI * 2 + Math.random() * .25;
+      sterne += `<i class="stern" style="--dx:${Math.cos(w).toFixed(3)};--dy:${(Math.sin(w) * .8).toFixed(3)};--t:${(6 + Math.random() * 4).toFixed(1)}s;--d:${(-Math.random() * 10).toFixed(1)}s"></i>`;
+    }
+    return sterne + symbole;
+  }
+
+  // Halbkreis-Messer wie in der Phishing Challenge (ohne Bestehensgrenze, wenn grenze fehlt)
+  function messer(p, mitte, grenze, label) {
+    const R = 96, U = 2 * Math.PI * R, L = U * 0.75;
+    let marke = '', lab = '';
+    if (grenze != null) {
+      const th = (135 + 270 * grenze) * Math.PI / 180, cos = Math.cos(th), sin = Math.sin(th);
+      const mx = 120 + R * cos, my = 120 + R * sin, ax = 120 + (R + 16) * cos, ay = 120 + (R + 16) * sin;
+      const lx = (120 + (R + 20) * cos) / 2.4, ly = (120 + (R + 20) * sin) / 2.4;
+      marke = `<g class="m-marke"><line x1="${mx}" y1="${my}" x2="${ax}" y2="${ay}"/><circle cx="${mx}" cy="${my}" r="5"/></g>`;
+      lab = `<div class="m-label" style="left:${lx}%;top:${ly}%;${cos < 0 ? 'transform:translate(calc(-100% - 10px),-100%);align-items:flex-end;' : ''}">${esc(label)}<b>${Math.round(grenze * 100)} %</b></div>`;
+    }
+    return `<div class="messer" data-p="${p}" data-l="${L}">
+      <svg viewBox="0 0 240 240"><defs><linearGradient id="messerVerlauf" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#0FE3A8"/><stop offset="1" stop-color="#5CFFD8"/></linearGradient></defs>
+        <circle class="m-spur" cx="120" cy="120" r="${R}" stroke-dasharray="${L} ${U}" transform="rotate(135 120 120)"/>
+        <circle class="m-wert" cx="120" cy="120" r="${R}" stroke-dasharray="${L} ${U}" style="stroke-dashoffset:${L}" transform="rotate(135 120 120)"/>${marke}</svg>
+      <div class="m-mitte">${mitte}</div>${lab}</div>`;
+  }
+  function messerStarten(el) {
+    const ms = el.querySelector('.messer'), wert = el.querySelector('.m-wert'), zahl = el.querySelector('.m-prozent');
+    if (!ms) return;
+    const p = +ms.dataset.p, L = +ms.dataset.l;
+    setTimeout(() => { wert.style.strokeDashoffset = L * (1 - p); }, reduziert ? 0 : 350);
+    (async () => {
+      await warte(reduziert ? 0 : 400);
+      const schritte = 26;
+      for (let i = 1; i <= schritte && !reduziert; i++) { if (!el.isConnected || el.closest('[hidden]')) return; zahl.textContent = Math.round(p * 100 * i / schritte) + ' %'; await warte(1300 / schritte); }
+      zahl.textContent = Math.round(p * 100) + ' %';
+    })();
+  }
+  function punkte(aktiv) {
+    return `<div class="punkte">${LV.map((l, i) => `<i class="${i === aktiv ? 'an' : i < aktiv ? 'fertig' : ''}"></i>`).join('')}</div>`;
+  }
+  // Ein Bildschirm-Container scrollt selbst (nie scrollIntoView – das verschiebt in einem LMS die ganze Seite)
+  function scrollZu(container, el) {
+    if (!container || !el) return;
+    const c = container.getBoundingClientRect(), r = el.getBoundingClientRect();
+    if (r.bottom > c.bottom - 12) container.scrollTo({ top: container.scrollTop + r.bottom - c.bottom + 24, behavior: reduziert ? 'auto' : 'smooth' });
+  }
+  const konfetti = (menge, farben) => window.Feier && Feier.konfetti(menge, farben);
+
+  // Text Zeichen für Zeichen schreiben (Hacker-Sprechblase, Werkbank-Kopf)
+  function tippe(el, text, tempo, ton) {
+    el.textContent = '';
+    const tok = {}; el._tipp = tok;
+    let i = 0;
+    return new Promise(ok => {
+      (function weiter() {
+        if (el._tipp !== tok) return ok();
+        i++; el.textContent = text.slice(0, i);
+        if (ton && i % 2 === 0 && text[i - 1] !== ' ') K.fx.tippen();
+        if (i >= text.length || reduziert) { el.textContent = text; return ok(); }
+        setTimeout(weiter, tempo || 22);
+      })();
+    });
+  }
+
+  // Zahl hochzählen
+  function zaehle(el, bis, format, dauer) {
+    const t0 = performance.now(); dauer = dauer || 1100;
+    (function schritt(t) {
+      const f = Math.min(1, (t - t0) / dauer), e = 1 - Math.pow(1 - f, 3);
+      el.textContent = format(Math.round(bis * e));
+      if (f < 1) requestAnimationFrame(schritt);
+    })(t0);
+  }
+
+  /* ================= Welle (Start) ================= */
+  function welle(canvas, quelle) {
+    const g = canvas.getContext('2d');
+    let w = 0, h = 0, t = 0;
+    function groesse() {
+      const r = canvas.getBoundingClientRect(), d = Math.min(2, devicePixelRatio || 1);
+      w = Math.max(1, r.width); h = Math.max(1, r.height);
+      canvas.width = w * d; canvas.height = h * d; g.setTransform(d, 0, 0, d, 0, 0);
+    }
+    groesse(); addEventListener('resize', groesse);
+    const kurve = x => Math.sin(x * 0.045 + t * 3) * 0.6 + Math.sin(x * 0.11 - t * 4.3) * 0.3 + Math.sin(x * 0.019 + t) * 0.4;
+    (function rahmen() {
+      if (!canvas.offsetParent) { requestAnimationFrame(rahmen); return; }
+      t += reduziert ? 0.004 : 0.016;
+      const p = quelle ? quelle() : 0.35 + 0.25 * Math.sin(t * 0.7);
+      g.clearRect(0, 0, w, h);
+      const mitte = h / 2, n = Math.floor(w / 3), naht = w / 2 + Math.sin(t * 0.9) * w * 0.03;
+      g.beginPath();
+      for (let i = 0; i <= n; i++) {
+        const x = i / n * w; if (x > naht) break;
+        const y = mitte + Math.sin(Math.PI * x / w) * h * 0.38 * p * kurve(x);
+        i ? g.lineTo(x, y) : g.moveTo(x, y);
+      }
+      g.strokeStyle = '#35F0C0'; g.lineWidth = 2.2; g.shadowColor = 'rgba(53,240,192,.6)'; g.shadowBlur = 12; g.stroke();
+      g.beginPath();
+      const stufe = 9; let erst = true;
+      for (let x = Math.floor(naht / stufe) * stufe; x <= w; x += stufe) {
+        const xx = Math.max(x, naht);
+        const y = Math.round((mitte + Math.sin(Math.PI * xx / w) * h * 0.38 * p * kurve(xx)) / 6) * 6;
+        if (erst) { g.moveTo(xx, y); erst = false; } else g.lineTo(xx, y);
+        g.lineTo(Math.min(w, x + stufe), y);
+      }
+      g.strokeStyle = '#FF2D87'; g.shadowColor = 'rgba(255,45,135,.6)'; g.stroke();
+      g.shadowBlur = 0; g.fillStyle = 'rgba(246,244,255,.45)';
+      for (let y = 6; y < h - 6; y += 7) if (Math.random() > 0.25) g.fillRect(naht - 0.75, y, 1.5, 3.5);
+      requestAnimationFrame(rahmen);
+    })();
+  }
+
+  /* ================= Start ================= */
+  function startAufbauen() {
+    $('hud-titel').textContent = C.hud.titel;
+    $('hud-beute-label').textContent = C.hud.beute;
+    $('start-titel').innerHTML = C.start.titel.split(' ').map((w, i) => `<span class="${i === 2 ? 'wort-ki' : ''}">${esc(w)}</span>`).join(' ');
+    $('start-los').innerHTML = esc(C.start.knopf) + ' ' + PFEIL;
+    $('start-kern').textContent = C.start.kern;
+    $('start-fakten').innerHTML = C.start.fakten.map(x => `<li>${esc(x)}</li>`).join('');
+    $('sternenflug').innerHTML = sternenflug();
+    welle($('start-welle'));
+    $('start-los').addEventListener('click', () => {
+      K.init(); K.fx.klick();
+      K.musik('intro', 0.55, 1.2);
+      vorladen(C.anrufe[0]);
+      neuesSpiel();
+      intro();
+    });
+  }
+
+  /* ================= Intro ================= */
+  let introAbbruch = false;
+  const introBild = new Image();
+  introBild.src = C.intro.foto;
+
+  async function intro() {
+    zeige('s-intro');
+    introAbbruch = false;
+    const ep = ++S.epoche;
+    const ok = () => !introAbbruch && ep === S.epoche;
+    $('intro-skip').textContent = C.intro.skip;
+    $('scan-bild').src = C.intro.foto;
+    tippe($('kit-kopf').querySelector('span'), C.intro.kopf, 40);
+    await warte(700);
+    for (const b of C.intro.beats) {
+      if (!ok()) return;
+      await beatZeigen(b, ok);
+    }
+    if (ok()) levelIntro(0);
+  }
+
+  async function beatZeigen(b, ok) {
+    const beat = $('beat'), gross = $('beat-gross'), klein = $('beat-klein'), erg = $('beat-ergebnis');
+    beat.classList.remove('rein'); beat.classList.add('raus');
+    await warte(180);
+    beat.dataset.art = b.art;
+    erg.textContent = ''; erg.classList.remove('an');
+    klein.textContent = b.klein || '';
+    if (b.art === 'frage') gross.innerHTML = '<span class="mega-a">Echt</span> <span class="mega-oder">oder</span> <span class="mega-b">Fake?</span>';
+    else gross.textContent = b.gross;
+    beat.classList.remove('raus'); void beat.offsetWidth; beat.classList.add('rein');
+
+    if (b.art === 'ring') {
+      K.musik('intro', 0.3, 2.6);   // leiser – sie läuft beim Level-Start weiter und bricht erst vor dem Klingeln ab
+      await warte(2600);
+      beat.classList.remove('rein'); beat.classList.add('raus');
+      await warte(900);
+      return;
+    }
+    K.fx.schlag();
+    if (b.art === 'audio') { await aufnahme(2800, ok); await ergebnis(b, ok); await warte(650); }
+    else if (b.art === 'foto') { await gesichtsScan(2400, ok); await ergebnis(b, ok); await warte(650); }
+    else if (b.art === 'frage') { gross.classList.add('flackern'); await warte(900); gross.classList.remove('flackern'); await warte(1500); }
+    else await warte(2300);
+  }
+  async function ergebnis(b, ok) {
+    if (!ok()) return;
+    const erg = $('beat-ergebnis');
+    erg.textContent = '✓ ' + b.ergebnis; erg.classList.add('an');
+    K.fx.fertig();
+    await warte(500);
+  }
+
+  // Werkbank 1: eine Aufnahme läuft drei Sekunden
+  function aufnahme(dauer, ok) {
+    const cv = $('rec-welle'), g = cv.getContext('2d'), zeit = $('rec-zeit');
+    const r = cv.getBoundingClientRect(), d = Math.min(2, devicePixelRatio || 1);
+    cv.width = r.width * d; cv.height = r.height * d; g.setTransform(d, 0, 0, d, 0, 0);
+    const W = r.width, H = r.height, balken = [];
+    let pegel = 0, letzterPiep = 0;
+    const t0 = performance.now();
+    return new Promise(fertig => {
+      (function schritt(t) {
+        const f = Math.min(1, (t - t0) / dauer);
+        zeit.textContent = '00:0' + (f * 3).toFixed(1);
+        // sprachartige Hüllkurve: Silben mit kleinen Pausen
+        const silbe = Math.sin(t / 95) * 0.5 + 0.5, pause = Math.sin(t / 610) > -0.55 ? 1 : 0.12;
+        pegel += ((0.25 + Math.random() * 0.75) * silbe * pause - pegel) * 0.35;
+        balken.push(pegel);
+        const n = Math.floor(W / 5); while (balken.length > n) balken.shift();
+        g.clearRect(0, 0, W, H);
+        balken.forEach((v, i) => {
+          const hh = Math.max(2, v * H * 0.9), x = W - (balken.length - i) * 5;
+          g.fillStyle = i > balken.length - 4 ? '#FF2D87' : 'rgba(255,45,135,.55)';
+          g.fillRect(x, (H - hh) / 2, 3, hh);
+        });
+        if (t - letzterPiep > 1000) { K.fx.rec(); letzterPiep = t; }
+        if (f < 1 && ok()) requestAnimationFrame(schritt); else fertig();
+      })(t0);
+    });
+  }
+
+  // Werkbank 2: ein Foto wird vermessen – Gitternetz über dem Gesicht
+  const NETZ = [ // normierte Gesichtspunkte (x, y), abgestimmt auf assets/intro-gesicht.jpg
+    [.36, .36], [.41, .345], [.46, .355], [.54, .355], [.59, .345], [.64, .36],
+    [.38, .395], [.42, .385], [.46, .395], [.54, .395], [.58, .385], [.62, .395],
+    [.50, .40], [.50, .50], [.465, .52], [.535, .52], [.50, .53],
+    [.44, .575], [.475, .565], [.525, .565], [.56, .575], [.50, .595],
+    [.31, .40], [.32, .50], [.35, .58], [.40, .64], [.50, .675], [.60, .64], [.65, .58], [.68, .50], [.69, .40]
+  ];
+  const KANTEN = [[0,1],[1,2],[3,4],[4,5],[6,7],[7,8],[9,10],[10,11],[2,12],[3,12],[12,13],[13,14],[13,15],[14,16],[15,16],
+    [17,18],[18,19],[19,20],[17,21],[20,21],[22,23],[23,24],[24,25],[25,26],[26,27],[27,28],[28,29],[29,30],
+    [0,22],[5,30],[8,12],[9,12],[6,22],[11,30],[14,17],[15,20],[16,21],[21,26],[24,17],[28,20],[8,14],[9,15]];
+  function gesichtsScan(dauer, ok) {
+    const box = $('scan'), cv = $('scan-netz'), g = cv.getContext('2d');
+    const r = box.getBoundingClientRect(), d = Math.min(2, devicePixelRatio || 1);
+    cv.width = r.width * d; cv.height = r.height * d; g.setTransform(d, 0, 0, d, 0, 0);
+    const W = r.width, H = r.height;
+    box.classList.remove('fertig'); box.classList.add('laeuft');
+    K.fx.scan();
+    const t0 = performance.now();
+    return new Promise(fertig => {
+      (function schritt(t) {
+        const f = Math.min(1, (t - t0) / dauer), y = f * 1.1;
+        box.style.setProperty('--scan', (f * 100) + '%');
+        g.clearRect(0, 0, W, H);
+        g.strokeStyle = 'rgba(53,240,192,.75)'; g.lineWidth = 1;
+        KANTEN.forEach(([a, b]) => {
+          const p = NETZ[a], q = NETZ[b];
+          if (p[1] > y || q[1] > y) return;
+          g.beginPath(); g.moveTo(p[0] * W, p[1] * H); g.lineTo(q[0] * W, q[1] * H); g.stroke();
+        });
+        g.fillStyle = '#35F0C0';
+        NETZ.forEach(p => { if (p[1] <= y) { g.beginPath(); g.arc(p[0] * W, p[1] * H, 2, 0, Math.PI * 2); g.fill(); } });
+        if (f < 1 && ok()) requestAnimationFrame(schritt);
+        else { box.classList.remove('laeuft'); box.classList.add('fertig'); fertig(); }
+      })(t0);
+    });
+  }
+
+  $('intro-skip').addEventListener('click', () => {
+    introAbbruch = true; K.fx.klick(); K.musik('intro', 0.3, 0.8);
+    levelIntro(0);
+  });
+
+  /* ================= Spiel ================= */
+  function neuesSpiel() {
+    S.i = 0; S.level = 0; S.ergebnisse = []; S.beute = 0; S.pause = null; S.pauseFertig = false;
+    $('hud-beute-wert').textContent = euro(0);
+  }
+
+  /* ================= HUD ================= */
+  // Was oben rechts steht, hängt vom Bildschirm ab (wie in der Serie): im Spiel Kasse, Fortschritt und Untertitel
+  function hudSichtbar() {
+    const scr = app.dataset.screen;
+    $('hud-beute').hidden = !['s-level', 's-spiel', 's-levelende'].includes(scr);
+    $('hud-fortschritt').hidden = !['s-spiel', 's-levelende'].includes(scr);
+    $('btn-cc').hidden = scr !== 's-spiel';
+    if (!$('hud-fortschritt').hidden) hudAktualisieren();
+  }
+  function hudAufbauen() {
+    $('hud-beute-wert').textContent = euro(S.beute);
+    hudAktualisieren();
+  }
+  function hudAktualisieren() {
+    const l = levelVon(S.i), a0 = lvStart(l), n = LV[l].anzahl;
+    $('hud-level').textContent = `${C.hud.level} ${l + 1}`;
+    $('hud-anruf').textContent = `${C.hud.anruf} ${Math.min(S.i - a0 + 1, n)}/${n}`;
+    const seg = $('hud-punkte');
+    if (seg.children.length !== n) seg.innerHTML = '<i></i>'.repeat(n);
+    [...seg.children].forEach((p, k) => {
+      const e = S.ergebnisse[a0 + k];
+      p.className = e ? (istRichtig(e) ? 'ja' : 'nein') : (a0 + k === S.i && app.dataset.screen === 's-spiel' ? 'jetzt' : '');
+    });
+  }
+  function beuteZaehlen(von, bis) {
+    const el = $('hud-beute-wert'), box = $('hud-beute');
+    box.classList.add('steigt');
+    const t0 = performance.now(), dauer = 1600; let n = 0;
+    (function schritt(t) {
+      const f = Math.min(1, (t - t0) / dauer), e = 1 - Math.pow(1 - f, 3);
+      el.textContent = euro(Math.round(von + (bis - von) * e));
+      if (n++ % 3 === 0 && f < 1) K.fx.muenze(n);
+      if (f < 1) requestAnimationFrame(schritt); else setTimeout(() => box.classList.remove('steigt'), 700);
+    })(t0);
+  }
+  $('btn-cc').addEventListener('click', () => {
+    S.cc = !S.cc; $('btn-cc').setAttribute('aria-pressed', S.cc); app.classList.toggle('ohne-cc', !S.cc); K.fx.klick();
+  });
+  $('btn-ton').addEventListener('click', () => {
+    K.setAn(!K.an); $('btn-ton').setAttribute('aria-pressed', K.an);
+  });
+
+  /* ================= Anruf ================= */
+  const geraet = $('geraet');
+  let timerStart = 0, timerId = null, ringId = null;
+
+  function setZustand(z) { geraet.dataset.zustand = z; app.dataset.anruf = z; }
+
+  function vorladen(a) {
+    const ids = [a.start.id]; a.runden.forEach(r => r.forEach(o => ids.push(o.antwort.id)));
+    ids.forEach(id => K.stimmeLaden(id));
+    K.sfxLaden('ring-' + a.klingel); if (a.atmo) K.sfxLaden('atmo-' + a.atmo);
+    if (a.geraet !== 'teams') K.sfxLaden('vibration');
+  }
+
+  function anrufStarten(i, opt) {
+    opt = opt || {};
+    const ep = ++S.epoche;
+    S.i = i; S.level = levelVon(i);
+    const a = C.anrufe[i];
+    S.a = a;
+    S.lauf = { pfad: [], zuege: [], runde: 0, aufgelegt: false, beendet: false };
+    if (app.dataset.screen !== 's-spiel') zeige('s-spiel');
+    hudAktualisieren();
+    $('urteil').hidden = true; $('feedback').hidden = true;
+    $('wahl').hidden = true; $('cc-nochmal').hidden = true;
+    $('cc-log').innerHTML = '<p class="cc-leer">Noch kein Gespräch.</p>';
+    $('ablehnen-tipp').hidden = true; $('geraet-ende').hidden = true;
+
+    // Lage
+    const [tag, uhr] = a.zeit.split(', ');
+    $('lage-tag').textContent = C.telefon.lage + ' · ' + tag; $('lage-zeit').textContent = uhr;
+    $('lage-titel').textContent = a.storyTitel; $('lage-text').textContent = a.lage;
+    const lage = $('lage'); lage.classList.remove('neu', 'zu'); void lage.offsetWidth; lage.classList.add('neu');
+    $('lage-toggle').setAttribute('aria-expanded', 'true');
+
+    // Gerät
+    geraet.dataset.art = a.geraet;
+    $('ph-uhr').textContent = uhr; $('ph-sperre-uhr').textContent = uhr; $('ph-sperre-datum').textContent = tag;
+    const an = a.anrufer;
+    const avatarHtml = an.foto ? `<img src="${an.foto}" alt="">` : `<span>${an.initialen}</span>`;
+    ['ph-avatar', 'win-avatar', 'win-toast-avatar'].forEach(id => { $(id).innerHTML = avatarHtml; $(id).style.setProperty('--farbe', an.farbe); });
+    $('ph-name').textContent = an.name; $('ph-zeile').textContent = an.zeile;
+    $('ph-kanal').textContent = a.geraet === 'video' ? C.telefon.eingehendVideo : C.telefon.eingehend;
+    $('ph-timer').textContent = ''; $('vid-name').textContent = an.name; $('vid-timer').textContent = '';
+    $('win-name').textContent = an.name; $('win-zeile').textContent = an.zeile; $('win-extern').hidden = !a.extern;
+    $('win-toast-name').textContent = an.name + (a.extern ? ' (Extern)' : ''); $('win-toast-zeile').textContent = a.extern ? an.zeile : 'ruft Sie an …';
+    $('win-call-name').textContent = an.name + (a.extern ? ' (Extern)' : '');
+    $('win-timer').textContent = '';
+    setZustand('ruhe');
+    videoVorbereiten(a);
+    posteingang(a);
+    vorladen(a);
+    const naechster = C.anrufe[i + 1]; if (naechster) setTimeout(() => vorladen(naechster), 3000);
+
+    // Ton: nach dem Intro komplett still; sonst leise Musik, die vor dem Klingeln abbricht
+    const verzoegerung = opt.still ? 4600 : 6200;
+    if (!opt.still) {
+      K.musik('intro', 0.2, 1.5);
+      setTimeout(() => { if (ep === S.epoche) K.musikAus(1.4); }, verzoegerung - 1900);
+    }
+    setTimeout(() => { if (ep === S.epoche) klingeln(); }, verzoegerung);
+  }
+
+  /* ---------- Posteingang im Teams-Fenster ---------- */
+  const SPAM = [
+    ['noreply@fitbox24.shop', 'Willkommen bei FitBox24 – bitte bestätigen'],
+    ['news@modeoutlet-deals.com', 'Ihr Newsletter-Abo ist aktiv'],
+    ['service@reisesparer.net', 'Ihr Konto wurde erstellt'],
+    ['info@gratisproben.de', 'Gratis-Probe: Jetzt Adresse bestätigen'],
+    ['hello@webinar-pro.io', 'Einladung: KI im Vertrieb (morgen, 10 Uhr)'],
+    ['no-reply@dealradar.shop', 'Wöchentlicher Deal-Report'],
+    ['support@cloudspeicher-24.com', 'Danke für Ihre Registrierung'],
+    ['team@jobportal-x.de', 'Bestätigen Sie Ihre E-Mail-Adresse'],
+    ['mail@gewinnspiel-heute.com', 'Anmeldung erfolgreich – viel Glück!'],
+    ['noreply@forum-tech.net', 'Ihr Aktivierungslink']
+  ];
+  const NORMAL = [
+    ['Lena Hofmann', 'Quartalszahlen – Entwurf für morgen'],
+    ['Kalender', 'Weekly Vertrieb · Do 10:00'],
+    ['IT-Service', 'Wartungsfenster am Samstag']
+  ];
+  // Die Liste liegt unter allem anderen und nimmt keine Klicks an; neue Zeilen kommen ruhig, nicht im Takt der Bildwiederholung.
+  function posteingang(a) {
+    clearInterval(posteingang.id);
+    const el = $('win-mails'), neuEl = $('win-mails-neu'), liste = $('win-mail-liste');
+    const zeile = ([von, betreff], neu) => {
+      const li = document.createElement('li'); if (neu) li.className = 'neu';
+      li.innerHTML = `<b>${esc(von)}</b><span>${esc(betreff)}</span>`;
+      liste.prepend(li);
+      while (liste.children.length > 6) liste.lastChild.remove();
+    };
+    liste.innerHTML = ''; neuEl.textContent = '';
+    if (a.id === 'c3') {
+      let n = 214, neu = 0; el.textContent = n;
+      for (let i = 0; i < 6; i++) zeile(SPAM[i % SPAM.length]);
+      posteingang.id = setInterval(() => {
+        const plus = 2 + Math.floor(Math.random() * 4);
+        n += plus; neu += plus; el.textContent = n; neuEl.textContent = '+' + neu + ' neu';
+        zeile(SPAM[Math.floor(Math.random() * SPAM.length)], true);
+      }, 750);
+    } else {
+      const mails = a.posteingang || NORMAL;
+      el.textContent = String(mails.length);
+      mails.slice().reverse().forEach(m => zeile(m));
+    }
+  }
+
+  function klingeln() {
+    const a = S.a;
+    setZustand('ring');
+    K.musikAus(0.2);
+    K.ring(a.klingel, a.geraet !== 'teams');
+    cancelAnimationFrame(ringId);
+    ringId = requestAnimationFrame(ringZeichnen);
+    (a.geraet === 'teams' ? $('win-annehmen') : $('ph-annehmen')).focus({ preventScroll: true });
+  }
+
+  function annehmen() {
+    if (geraet.dataset.zustand !== 'ring') return;
+    const a = S.a, ep = S.epoche;
+    clearInterval(posteingang.id);
+    K.ringStop(); K.fx.verbinden();
+    setZustand('talk');
+    $('ablehnen-tipp').hidden = true;
+    $('cc-log').innerHTML = '';
+    // Beim Klingeln bleibt die Lage offen (zum Fertiglesen); erst beim Abheben klappt sie ein – dort, wo sie über dem Gerät steht
+    if (innerWidth < 960) { $('lage').classList.add('zu'); $('lage-toggle').setAttribute('aria-expanded', 'false'); }
+    timerStart = performance.now();
+    clearInterval(timerId);
+    timerId = setInterval(() => {
+      const s = Math.floor((performance.now() - timerStart) / 1000);
+      const t = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+      $('ph-timer').textContent = t; $('vid-timer').textContent = t; $('win-timer').textContent = t;
+    }, 250);
+    K.atmo(a.atmo, a.klang);
+    if (a.video) videoStart();
+    setTimeout(() => { if (ep === S.epoche) sprechen(a.start, nachZeile); }, a.video ? 900 : 650);
+  }
+  function ablehnen() {
+    if (geraet.dataset.zustand !== 'ring') return;
+    K.fx.falsch();
+    const t = $('ablehnen-tipp'); t.textContent = C.telefon.ablehnenTipp; t.hidden = false;
+    geraet.classList.remove('wackeln'); void geraet.offsetWidth; geraet.classList.add('wackeln');
+  }
+  $('ph-annehmen').addEventListener('click', annehmen);
+  $('win-annehmen').addEventListener('click', annehmen);
+  $('ph-ablehnen').addEventListener('click', ablehnen);
+  $('win-ablehnen').addEventListener('click', ablehnen);
+  $('ph-auflegen').addEventListener('click', () => beenden('aufgelegt'));
+  $('win-auflegen').addEventListener('click', () => beenden('aufgelegt'));
+
+  /* ---------- Untertitel ---------- */
+  let ccZeile = null, ccWoerter = [], ccRaf = null, ccQuelle = null;
+  function ccNeu(wer, text, art) {
+    const log = $('cc-log');
+    const d = document.createElement('div');
+    d.className = 'cc-zeile cc-' + art;
+    d.innerHTML = `<span class="cc-wer">${esc(wer)}</span><p>${text.split(' ').map(w => `<span>${esc(w)}</span>`).join(' ')}</p>`;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    return d;
+  }
+  function ccStart(el, quelle) {
+    ccZeile = el; ccWoerter = [...el.querySelectorAll('p span')]; ccQuelle = quelle;
+    // Startpunkt jedes Wortes als Anteil an allen Buchstaben (Satzzeichen zählen als kurze Pause)
+    const gewicht = ccWoerter.map(w => w.textContent.replace(/[^\p{L}\p{N}]/gu, '').length + (/[.!?…]$/.test(w.textContent) ? 3 : /[,–:]$/.test(w.textContent) ? 1.5 : 0) + 1);
+    const gesamt = gewicht.reduce((a, b) => a + b, 0);
+    let lauf = 0; const ab = gewicht.map(g => { const v = lauf / gesamt; lauf += g; return v; });
+    cancelAnimationFrame(ccRaf);
+    const log = $('cc-log');
+    (function schritt() {
+      const f = ccQuelle ? ccQuelle() : null;
+      if (f != null) {
+        for (let i = 0; i < ccWoerter.length; i++) if (ab[i] <= f + 0.015 && !ccWoerter[i].classList.contains('an')) { ccWoerter[i].classList.add('an'); log.scrollTop = log.scrollHeight; }
+      }
+      ccRaf = requestAnimationFrame(schritt);
+    })();
+  }
+  function ccFertig() {
+    cancelAnimationFrame(ccRaf);
+    if (ccZeile) ccWoerter.forEach(w => w.classList.add('an'));
+    ccZeile = null; ccQuelle = null;
+  }
+
+  /* ---------- Sprechen ---------- */
+  let letzte = null;
+  async function sprechen(zeile, danach) {
+    const a = S.a, ep = S.epoche;
+    letzte = { zeile, danach };
+    $('cc-nochmal').hidden = true;
+    geraet.classList.add('spricht');
+    const el = ccNeu(a.anrufer.name, ohneTags(zeile.tts), 'anrufer');
+    const fertig = () => {
+      if (ep !== S.epoche || S.lauf.beendet) return;
+      geraet.classList.remove('spricht');
+      ccFertig();
+      setTimeout(() => { if (ep === S.epoche && !S.lauf.beendet) danach(); }, 380);
+    };
+    if (a.video) { videoSprechen(zeile, el, fertig); return; }
+    await K.stimme(zeile.id, a.klang, fertig);
+    if (ep !== S.epoche) { K.stimmeStop(); return; }
+    ccStart(el, () => K.textFortschritt());
+  }
+
+  function nachZeile() {
+    const L = S.lauf, a = S.a, ep = S.epoche;
+    if (L.runde >= a.runden.length) { beenden('ende'); return; }
+    // Videoanruf: Sie schaltet die Kamera ein, bevor du antwortest – du siehst ihr Gesicht, bevor du entscheidest
+    if (a.video && L.runde === a.video.kameraAn && V.box.classList.contains('kamera-aus')) {
+      kameraAn();
+      setTimeout(() => { if (ep === S.epoche && !L.beendet) zeigeWahl(L.runde); }, 900);
+      return;
+    }
+    zeigeWahl(L.runde);
+  }
+
+  function zeigeWahl(r) {
+    const a = S.a, w = $('wahl');
+    $('wahl-label').textContent = C.telefon.duSagst;
+    $('wahl-optionen').innerHTML = a.runden[r].map((o, i) =>
+      `<button class="option" type="button" data-i="${i}" style="--i:${i}"><kbd>${i + 1}</kbd><span>${esc(o.text)}</span></button>`).join('');
+    w.hidden = false;
+    w.classList.remove('rein'); void w.offsetWidth; w.classList.add('rein');
+    if (innerWidth < 960) setTimeout(() => scrollZu($('s-spiel'), w), 60);
+    $('cc-nochmal').hidden = false;
+    w.querySelectorAll('.option').forEach(b => {
+      b.addEventListener('click', () => waehlen(+b.dataset.i));
+      b.addEventListener('mouseenter', () => K.fx.hover());
+    });
+  }
+  $('cc-nochmal').addEventListener('click', () => {
+    if (!letzte || $('wahl').hidden) return;
+    K.fx.klick(); $('wahl').hidden = true;
+    sprechen(letzte.zeile, letzte.danach);
+  });
+
+  function waehlen(i) {
+    const a = S.a, L = S.lauf, ep = S.epoche;
+    if ($('wahl').hidden || L.beendet) return;
+    const o = a.runden[L.runde][i];
+    K.fx.wahl();
+    L.zuege.push({ runde: L.runde, o });
+    L.pfad.push(o.antwort.id);
+    $('wahl').hidden = true; $('cc-nochmal').hidden = true;
+    ccNeu('Du', o.text, 'du');
+    L.runde++;
+    setTimeout(() => { if (ep === S.epoche && !L.beendet) sprechen(o.antwort, nachZeile); }, 900);
+  }
+
+  async function beenden(grund) {
+    const L = S.lauf, ep = S.epoche;
+    if (!L || L.beendet) return;
+    L.beendet = true;
+    L.aufgelegt = grund === 'aufgelegt';
+    K.stimmeStop(); K.ringStop(); K.atmoStop(); ccFertig(); videoStop();
+    cancelAnimationFrame(ringId); clearInterval(timerId); clearInterval(posteingang.id);
+    geraet.classList.remove('spricht');
+    $('wahl').hidden = true; $('cc-nochmal').hidden = true;
+    if (grund !== 'verbindung') K.fx.auflegen();
+    const ende = $('geraet-ende');
+    ende.textContent = grund === 'verbindung' ? C.telefon.verbindungWeg : C.telefon.beendet; ende.hidden = false;
+    setZustand('ende');
+    await warte(1500);
+    if (ep === S.epoche) urteilZeigen();
+  }
+
+  /* ---------- Ring-Visual ---------- */
+  function ringZeichnen() {
+    const z = geraet.dataset.zustand;
+    const cv = S.a.geraet === 'teams' ? $('win-ring') : $('ph-ring');
+    const g = cv.getContext('2d'), w = cv.width, h = cv.height, m = w / 2;
+    g.clearRect(0, 0, w, h);
+    const t = performance.now() / 1000;
+    if (z === 'ring') {
+      for (let k = 0; k < 3; k++) {
+        const f = ((t * 0.7 + k / 3) % 1);
+        g.beginPath(); g.arc(m, m, 62 + f * 90, 0, Math.PI * 2);
+        g.strokeStyle = S.a.geraet === 'teams' ? `rgba(127,133,245,${0.5 * (1 - f)})` : `rgba(53,240,192,${0.5 * (1 - f)})`; g.lineWidth = 2.5; g.stroke();
+      }
+    } else if (z === 'talk') {
+      const p = K.pegel();
+      g.beginPath();
+      for (let i = 0; i <= 72; i++) {
+        const wnk = i / 72 * Math.PI * 2;
+        const r = 70 + p * 26 * (0.7 + 0.3 * Math.sin(wnk * 3 + t * 4)) + p * 7 * Math.sin(wnk * 5 - t * 6);
+        const x = m + Math.cos(wnk) * r, y = m + Math.sin(wnk) * r;
+        i ? g.lineTo(x, y) : g.moveTo(x, y);
+      }
+      g.closePath();
+      const rgb = S.a.geraet === 'teams' ? '127,133,245' : '53,240,192';   // Teams-Violett bzw. Aqua
+      g.strokeStyle = `rgba(${rgb},.9)`; g.lineWidth = 2.5; g.stroke();
+      g.fillStyle = `rgba(${rgb},${0.06 + p * 0.18})`; g.fill();
+    }
+    if (z === 'ring' || z === 'talk') ringId = requestAnimationFrame(ringZeichnen);
+  }
+
+  /* ================= Video (Deepfake) ================= */
+  // Zwei Bühnen: das Handy (WhatsApp-Video) und die große Kachel im Teams-Fenster. V zeigt auf die des laufenden Anrufs.
+  const BUEHNEN = {
+    phone: { box: $('ph-video'), idle: $('vid-idle'), talk: $('vid-talk'), glitch: $('vid-glitch'), warn: $('vid-warn') },
+    teams: { box: $('win-video'), idle: $('win-vid-idle'), talk: $('win-vid-talk'), glitch: $('win-vid-glitch'), warn: $('win-vid-warn') }
+  };
+  let V = BUEHNEN.phone;
+  let vLauf = null, ausRaf = 0;
+  function videoVorbereiten(a) {
+    Object.values(BUEHNEN).forEach(b => {
+      b.idle.removeAttribute('src'); b.talk.removeAttribute('src'); b.talk.style.opacity = 0;
+      b.box.classList.remove('kamera-aus', 'haengt'); b.glitch.classList.remove('an'); b.warn.hidden = true;
+    });
+    geraet.classList.toggle('mit-video', !!a.video);
+    if (!a.video) { geraet.style.removeProperty('--poster'); return; }
+    V = a.geraet === 'teams' ? BUEHNEN.teams : BUEHNEN.phone;
+    const absolut = pfad => `url("${new URL(pfad, location.href).href}")`; // absolut, sonst löst das Stylesheet den Pfad relativ zu css/ auf
+    const kameraAus = (a.video.kameraAn || 0) > 0;
+    V.box.style.backgroundImage = `url(${a.video.poster})`;
+    V.box.classList.toggle('kamera-aus', kameraAus);
+    V.box.style.setProperty('--foto', absolut(a.anrufer.foto));
+    $('vid-aus-text').textContent = C.telefon.kameraAus;
+    $('vid-aus-bild').style.setProperty('--pegel', 0);
+    // Startet sie ohne Kamera, zeigt auch das Klingeln nur ihr Profilbild
+    geraet.style.setProperty('--poster', absolut(kameraAus ? a.anrufer.foto : a.video.poster));
+    V.idle.src = a.video.idle; V.idle.muted = true; V.idle.load();
+    const ids = [a.start.id]; a.runden.forEach(r => r.forEach(o => ids.push(o.antwort.id)));
+    videoVorbereiten.cache = ids.filter(id => (a.video.clips || []).includes(id)).map(id => { const v = document.createElement('video'); v.preload = 'auto'; v.muted = true; v.src = 'assets/video/' + id + '.mp4'; return v; });
+  }
+  function videoStart() { V.idle.play().catch(() => { }); }
+  function videoStop() {
+    if (vLauf) { cancelAnimationFrame(vLauf.raf); vLauf = null; }
+    cancelAnimationFrame(ausRaf);
+    try { V.talk.pause(); } catch (e) { }
+    V.idle.pause();
+  }
+  // Der Clip läuft stumm; der Ton kommt als dieselbe Aufnahme durch die Leitung.
+  // Weicht das Bild mehr als 0,12 s vom Ton ab, springt es nach. video.versatz lässt das Bild
+  // absichtlich konstant hinterherlaufen – so wie bei einem Echtzeit-Deepfake.
+  async function videoSprechen(zeile, el, fertig) {
+    if (V.box.classList.contains('kamera-aus')) { tonSprechen(zeile, el, fertig); return; }
+    if (!(S.a.video.clips || []).includes(zeile.id)) { standbildSprechen(zeile, el, fertig); return; }
+    const ep = S.epoche, versatz = S.a.video.versatz || 0;
+    V.box.classList.remove('haengt'); V.warn.hidden = true;
+    const p = await K.stimmeLaden(zeile.id);
+    const start = p ? p.start : 0;
+    const abbruchZeile = !!zeile.glitch;
+    let eingefroren = false, bildOk = true;
+    const vt = V.talk;
+    vt.muted = true;
+    vt.src = 'assets/video/' + zeile.id + '.mp4';
+    try { vt.currentTime = start; await vt.play(); } catch (e) { bildOk = false; }
+    if (ep !== S.epoche) { vt.pause(); return; }
+    // Spielt der Browser den Clip nicht ab (Stromsparen, Hintergrund-Tab), läuft die Zeile wie die ohne Clip
+    if (!bildOk) { standbildSprechen(zeile, el, fertig); return; }
+    if (versatz) vt.pause(); // startet erst, wenn der Ton den Versatz voraus ist
+    const tok = await K.stimme(zeile.id, S.a.klang, () => {
+      if (vLauf) { cancelAnimationFrame(vLauf.raf); vLauf = null; }
+      if (abbruchZeile && ep === S.epoche) { verbindungWeg(); return; }
+      setTimeout(() => {
+        if (ep !== S.epoche) return;
+        vt.style.opacity = 0; setTimeout(() => vt.pause(), 250);
+        // Er schaltet die Kamera ab: Teams zeigt dann nur noch seine Initialen
+        if (zeile.kameraAus) { V.box.classList.add('kamera-aus'); setTimeout(() => { if (ep === S.epoche) fertig(); }, 1600); return; }
+        fertig();
+      }, versatz * 1000);
+    });
+    if (ep !== S.epoche) return;
+    vt.style.opacity = 1;
+    ccStart(el, () => K.textFortschritt());
+    vLauf = { raf: 0 };
+    (function schritt() {
+      if (!vLauf || ep !== S.epoche) return;
+      const f = K.fortschritt();
+      if (f != null && !eingefroren) {
+        const t = f * tok.dauer - versatz;
+        if (t >= 0) {
+          if (vt.paused) vt.play().catch(() => { });
+          const soll = start + t;
+          if (Math.abs(vt.currentTime - soll) > 0.12 && soll < (vt.duration || 99)) vt.currentTime = soll;
+        }
+        // Hand-Test: Bild bleibt stehen, der Ton läuft noch kurz weiter – wie ein echter Abbruch
+        if (abbruchZeile && f > 0.7) { eingefroren = true; vt.pause(); bildEinfrieren(vt); V.warn.textContent = C.telefon.instabil; V.warn.hidden = false; }
+      }
+      vLauf.raf = requestAnimationFrame(schritt);
+    })();
+  }
+
+  // Kamera aus: nur Ton. Auf dem Handy atmet das Profilbild mit der Stimme, in Teams der Ring um die Initialen.
+  async function tonSprechen(zeile, el, fertig) {
+    const ep = S.epoche, bild = $('vid-aus-bild');
+    const ende = () => {
+      cancelAnimationFrame(ausRaf); bild.style.setProperty('--pegel', 0);
+      if (zeile.glitch && ep === S.epoche) { verbindungWeg(); return; }
+      fertig();
+    };
+    await K.stimme(zeile.id, S.a.klang, ende);
+    if (ep !== S.epoche) return;
+    ccStart(el, () => K.textFortschritt());
+    let p = 0;
+    cancelAnimationFrame(ausRaf);
+    (function schritt() {
+      if (ep !== S.epoche || S.lauf.beendet) return;
+      p += (K.pegel() - p) * 0.3;
+      bild.style.setProperty('--pegel', p.toFixed(3));
+      ausRaf = requestAnimationFrame(schritt);
+    })();
+  }
+  function kameraAn() {
+    V.idle.play().catch(() => { });
+    V.box.classList.remove('kamera-aus');
+  }
+
+  // Ohne Clip: Das Live-Bild läuft weiter, nur mit weniger Bildern pro Sekunde (schwache Verbindung).
+  // Ab und zu hält ein Bild etwas länger – mehr nicht, keine Unschärfe, keine Pixel.
+  async function standbildSprechen(zeile, el, fertig) {
+    const ep = S.epoche;
+    const box = V.box, warn = V.warn;
+    box.classList.add('haengt'); warn.textContent = C.telefon.schwach; warn.hidden = false;
+    V.idle.play().catch(() => { });
+    const raster = wenigerBilder(V.idle, () => ep === S.epoche && box.classList.contains('haengt'));
+    const ende = () => {
+      raster.stop();
+      box.classList.remove('haengt'); warn.hidden = true;
+      if (zeile.glitch && ep === S.epoche) { bildEinfrieren(V.idle); verbindungWeg(); return; }
+      fertig();
+    };
+    await K.stimme(zeile.id, S.a.klang, ende);
+    if (ep !== S.epoche) { raster.stop(); return; }
+    ccStart(el, () => K.textFortschritt());
+  }
+
+  // Zeichnet das Video mit ca. 11 Bildern pro Sekunde auf die Leinwand darüber
+  function bildZeichnen(video) {
+    const box = V.box.getBoundingClientRect(), d = Math.min(2, devicePixelRatio || 1), cv = V.glitch;
+    const W = Math.round(box.width * d), H = Math.round(box.height * d);
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    const g = cv.getContext('2d');
+    const vw = video.videoWidth || 448, vh = video.videoHeight || 832;
+    const s = Math.max(W / vw, H / vh), dw = vw * s, dh = vh * s;
+    try { g.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh); } catch (e) { }
+  }
+  function wenigerBilder(video, weiter) {
+    let aktiv = true, timer = 0, naechsterHaenger = performance.now() + 3500 + Math.random() * 2500;
+    const cv = V.glitch;
+    cv.classList.add('an');
+    (function takt() {
+      if (!aktiv || !weiter()) return;
+      bildZeichnen(video);
+      let warte = 85 + Math.random() * 25;
+      if (performance.now() > naechsterHaenger) { warte = 320 + Math.random() * 260; naechsterHaenger = performance.now() + 3500 + Math.random() * 3000; }
+      timer = setTimeout(takt, warte);
+    })();
+    return { stop() { aktiv = false; clearTimeout(timer); cv.classList.remove('an'); } };
+  }
+  function bildEinfrieren(video) { bildZeichnen(video); V.glitch.classList.add('an'); }
+  function verbindungWeg() {
+    K.fx.glitch(0.45);
+    V.warn.textContent = C.telefon.verbindungWeg; V.warn.hidden = false;
+    setTimeout(() => beenden('verbindung'), 900);
+  }
+
+  /* ================= Urteil ================= */
+  function urteilZeigen() {
+    const U = C.urteil, u = $('urteil');
+    $('urteil-frage').textContent = U.frage;
+    $('urteil-sub').textContent = U.sub;
+    const e = $('urteil-echt'), f = $('urteil-fake');
+    e.querySelector('b').textContent = U.echt.titel; e.querySelector('span').textContent = U.echt.text;
+    f.querySelector('b').textContent = U.fake.titel; f.querySelector('span').textContent = U.fake.text;
+    [e, f].forEach(b => b.classList.remove('gewaehlt', 'abgewaehlt'));
+    u.classList.remove('entschieden');
+    u.hidden = false;
+    if (innerWidth < 960) setTimeout(() => scrollZu($('s-spiel'), u), 60);
+    K.fx.bass();
+    K.musik('intro', 0.14, 2);
+  }
+  $('urteil-echt').addEventListener('click', () => urteilen('echt'));
+  $('urteil-fake').addEventListener('click', () => urteilen('fake'));
+
+  function urteilen(wahl) {
+    const u = $('urteil');
+    if (u.hidden || u.classList.contains('entschieden')) return;
+    u.classList.add('entschieden');
+    const gew = wahl === 'echt' ? $('urteil-echt') : $('urteil-fake');
+    const nicht = wahl === 'echt' ? $('urteil-fake') : $('urteil-echt');
+    gew.classList.add('gewaehlt'); nicht.classList.add('abgewaehlt');
+    K.fx.wahl();
+    const a = S.a, L = S.lauf;
+    const richtig = (wahl === 'echt') === a.echt;
+    const zuSpaet = !a.echt && richtig && a.schadenBei && L.pfad.includes(a.schadenBei);
+    const gut = L.zuege.filter(z => z.o.wert === 'gut').length;
+    const beute = !a.echt && (!richtig || zuSpaet) ? a.beute : 0;
+    const erg = { id: a.id, wahl, richtig, zuSpaet, beute, gut, zuege: [...L.zuege], pfad: [...L.pfad], aufgelegt: L.aufgelegt };
+    S.ergebnisse[S.i] = erg;
+    const alt = S.beute; S.beute += beute;
+    setTimeout(() => {
+      u.hidden = true;
+      hudAktualisieren();
+      feedbackZeigen(erg, alt);
+    }, reduziert ? 0 : 520);
+  }
+
+  /* ================= Feedback ================= */
+  function feedbackZeigen(erg, kasseVorher) {
+    const a = S.a, F = C.feedback;
+    let art;
+    if (!a.echt) art = erg.zuSpaet ? 'zuSpaet' : (erg.richtig ? 'entlarvt' : 'getaeuscht');
+    else art = erg.richtig ? 'echtErkannt' : 'fehlalarm';
+    const blatt = $('fb-blatt');
+    blatt.dataset.art = art;
+    $('fb-stempel').textContent = F[art].stempel;
+    $('fb-kicker').textContent = `${C.hud.anruf} ${S.i + 1} · ${a.echt ? 'Echter Anruf' : 'KI-Fake'}`;
+    $('fb-titel').textContent = F[art].titel;
+    const sub = art === 'zuSpaet' ? a.schadenText : art === 'fehlalarm' ? F.fehlalarmSub : art === 'getaeuscht' ? `Der Hacker kassiert: ${a.beuteText}.` : '';
+    $('fb-sub').textContent = sub; $('fb-sub').hidden = !sub;
+    const fbBeute = $('fb-punkte');
+    fbBeute.hidden = a.echt;
+    fbBeute.classList.toggle('null', !erg.beute);
+    // Die Beute dieses Anrufs zählt sichtbar im Blatt hoch, die Kasse darunter mit; die Anzeige oben im Spiel wird still nachgezogen
+    fbBeute.classList.remove('zaehlt');
+    fbBeute.innerHTML = erg.beute
+      ? `<b>+0 €</b><span>${F.beute}</span><small>${F.kasse} <em>${euro(kasseVorher)}</em></small>`
+      : `<b>0 €</b><span>${F.beute} · ${F.beuteNull}</span><small>${F.kasse} <em>${euro(S.beute)}</em></small>`;
+    $('hud-beute-wert').textContent = euro(S.beute);
+    if (erg.beute) setTimeout(() => {
+      fbBeute.classList.add('zaehlt');
+      const plus = fbBeute.querySelector('b'), summe = fbBeute.querySelector('em');
+      const t0 = performance.now(), dauer = reduziert ? 1 : 1500; let n = 0;
+      (function schritt(t) {
+        const f = Math.min(1, (t - t0) / dauer), e = 1 - Math.pow(1 - f, 3);
+        plus.textContent = '+' + euro(Math.round(erg.beute * e));
+        summe.textContent = euro(Math.round(kasseVorher + erg.beute * e));
+        if (n++ % 3 === 0 && f < 1) K.fx.muenze(n);
+        if (f < 1) requestAnimationFrame(schritt);
+      })(t0);
+    }, 1200);
+
+    const h = a.hacker;
+    const gewonnen = a.echt ? erg.richtig : (erg.richtig && !erg.zuSpaet);
+    $('fb-hacker').dataset.stimmung = gewonnen ? 'sauer' : 'froh';
+    $('fb-hacker-text').textContent = '';
+    setTimeout(() => tippe($('fb-hacker-text'), a.echt ? (erg.richtig ? h.echt : h.fehlalarm) : (gewonnen ? h.erwischt : h.reingelegt), 24, true), 650);
+
+    $('fb-kern-label').textContent = F.kern;
+    $('fb-kern-text').textContent = a.kern;
+
+    // Signale als Chips – Details nur auf Wunsch
+    $('fb-signale-titel').textContent = a.echt ? F.signaleEcht : F.signaleFake;
+    $('fb-antippen').textContent = F.antippen;
+    const sig = a.signale.filter(s => (!s.wenn || erg.pfad.includes(s.wenn)) && (!s.wennNicht || !erg.pfad.includes(s.wennNicht)));
+    const chips = $('fb-signale'), detail = $('fb-signal-detail');
+    detail.hidden = true;
+    chips.innerHTML = sig.map((s, i) => `<button class="chip chip-${s.art}" type="button" role="listitem" data-i="${i}" style="--i:${i}" aria-expanded="false">${esc(s.titel)}</button>`).join('');
+    chips.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      const offen = b.getAttribute('aria-expanded') === 'true';
+      chips.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-expanded', 'false'));
+      if (offen) { detail.hidden = true; return; }
+      const s = sig[+b.dataset.i];
+      b.setAttribute('aria-expanded', 'true');
+      detail.className = 'chip-detail detail-' + s.art;
+      detail.innerHTML = `<b>${esc(s.titel)}</b><span>${esc(s.text)}</span>`;
+      detail.hidden = false;
+      K.fx.aufdecken();
+    }));
+    if (!reduziert) sig.forEach((s, i) => setTimeout(() => K.fx.pop(i), 900 + i * 110));
+
+    // Eigene Züge: Etikett + Satz, Kommentar per Antippen
+    $('fb-zuege-titel').textContent = F.zuege;
+    const LABEL = { gut: 'Stark', riskant: 'Riskant', neutral: 'Okay' };
+    let zuege = erg.zuege.map(z => ({ wert: z.o.wert, text: z.o.text, kommentar: z.o.kommentar }));
+    if (erg.aufgelegt) zuege.push({ wert: a.echt ? 'neutral' : 'gut', text: 'Aufgelegt', kommentar: a.echt ? F.aufgelegtEcht : F.aufgelegtFake });
+    $('fb-zuege').innerHTML = zuege.length ? zuege.map((z, i) =>
+      `<button class="zug zug-${z.wert}" type="button" style="--i:${i}" aria-expanded="false"><span class="zug-label">${LABEL[z.wert]}</span><q>${esc(z.text)}</q><span class="zug-mehr">${esc(z.kommentar)}</span></button>`).join('')
+      : '<p class="zug-leer">Kein Gesprächszug.</p>';
+    $('fb-zuege').querySelectorAll('.zug').forEach(b => b.addEventListener('click', () => {
+      const offen = b.getAttribute('aria-expanded') === 'true';
+      b.setAttribute('aria-expanded', String(!offen)); if (!offen) K.fx.aufdecken();
+    }));
+
+    $('fb-tipp-titel').textContent = F.tipp + ':'; $('fb-tipp-text').textContent = a.tipp;
+    const letzterImLevel = S.i === lvStart(S.level) + LV[S.level].anzahl - 1;
+    $('fb-weiter').innerHTML = esc(letzterImLevel ? F.zurLevelAuswertung : F.weiter) + ' ' + PFEIL;
+
+    const fb = $('feedback');
+    fb.hidden = false; fb.scrollTop = 0;
+    blatt.classList.remove('rein'); void blatt.offsetWidth; blatt.classList.add('rein');
+    const st = $('fb-stempel'); st.classList.remove('knall'); void st.offsetWidth; st.classList.add('knall');
+    setTimeout(() => { K.fx.stempel(); (erg.richtig && !erg.zuSpaet ? K.fx.richtig : K.fx.falsch)(); }, 330);
+    K.musik('intro', 0.2, 2);
+    $('fb-weiter').focus({ preventScroll: true });
+  }
+  $('fb-weiter').addEventListener('click', weiterNachFeedback);
+  function weiterNachFeedback() {
+    if ($('feedback').hidden) return;
+    K.fx.klick();
+    $('feedback').hidden = true;
+    const naechster = S.i + 1;
+    if (naechster >= lvStart(S.level) + LV[S.level].anzahl) levelEnde(S.level);
+    else anrufStarten(naechster);
+  }
+
+  /* ================= Level-Start (wie in der Serie: „Bereit für Level X?“) ================= */
+  function levelIntro(l) {
+    ++S.epoche;
+    S.level = l; S.i = lvStart(l);
+    const lv = LV[l], LI = C.levelIntro, n = lv.anzahl, ep = S.epoche;
+    zeige('s-level');
+    K.musik('intro', 0.3, 1.5);
+    $('lv-kicker').textContent = f(LI.kicker, { n: l + 1, gesamt: LV.length });
+    const ic = $('lv-icon');
+    ic.innerHTML = (lv.art === 'video' ? BILD.video('lvv') : BILD.telefon('lvt')) + '<span class="lv-zahl" id="lv-zahl">0</span>';
+    $('lv-titel').textContent = f(LI.titel, { n: l + 1 });
+    $('lv-unter').textContent = lv.kicker;
+    $('lv-info').innerHTML = `<span>${chipHoerer}<b id="lv-n">0</b> ${esc(LI.anrufe)}</span><span>${lv.art === 'video' ? icon('kamera') : '<svg class="ico" viewBox="0 0 24 24"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/></svg>'}${esc(lv.info)}</span>`;
+    $('lv-los').innerHTML = esc(LI.los) + ' ' + PFEIL;
+    vorladen(C.anrufe[S.i]);
+    // die Anrufe des Levels fliegen in die Kachel, die Zahl zählt mit
+    const zahl = $('lv-zahl'), zahl2 = $('lv-n');
+    (async () => {
+      await warte(reduziert ? 0 : 900);
+      zahl.classList.add('da');
+      for (let k = 1; k <= n; k++) {
+        if (ep !== S.epoche) return;
+        if (!reduziert) {
+          const w = Math.random() * Math.PI * 2, fl = document.createElement('span');
+          fl.className = 'flieger'; fl.style.setProperty('--fx', Math.cos(w) * 160 + 'px'); fl.style.setProperty('--fy', Math.sin(w) * 120 - 40 + 'px');
+          fl.innerHTML = lv.art === 'video' ? icon('kamera') : chipHoerer;
+          ic.appendChild(fl); setTimeout(() => fl.remove(), 800);
+        }
+        await warte(reduziert ? 0 : 300);
+        zahl.textContent = k; zahl2.textContent = k;
+        zahl.classList.remove('tick'); void zahl.offsetWidth; zahl.classList.add('tick');
+        K.fx.pop(k);
+      }
+      K.fx.fertig();
+    })();
+    setTimeout(() => { if (ep === S.epoche) $('lv-los').focus({ preventScroll: true }); }, 400);
+  }
+  $('lv-los').addEventListener('click', () => {
+    if (app.dataset.screen !== 's-level') return;
+    K.fx.klick();
+    hudAufbauen();
+    anrufStarten(lvStart(S.level));
+  });
+
+  /* ================= Level-Auswertung: Halbkreis-Messer wie in der Serie ================= */
+  function levelEnde(l) {
+    ++S.epoche;
+    S.level = l;
+    const lv = LV[l], LE = C.levelEnde, a0 = lvStart(l), n = lv.anzahl;
+    S.i = a0 + n - 1;
+    $('hud-beute-wert').textContent = euro(S.beute);
+    const anrufe = C.anrufe.slice(a0, a0 + n), erg = anrufe.map((a, k) => S.ergebnisse[a0 + k]);
+    const r = erg.filter(istRichtig).length, beute = erg.reduce((x, e) => x + ((e && e.beute) || 0), 0);
+    const perfekt = r === n, gut = r * 2 >= n, letztes = l === LV.length - 1;
+    const titel = perfekt ? LE.perfekt : gut ? f(LE.gut, { n: l + 1 }) : LE.knapp;
+    const weiterText = letztes ? LE.zumErgebnis : (l === 0 && !S.pauseFertig ? LE.zumTipp : f(LE.naechstesLevel, { n: l + 2 }));
+    const mitte = `<span class="m-symbol ${gut ? '' : 'nein'}"><svg viewBox="0 0 24 24"><path d="${gut ? 'm5 12.5 4.5 4.5L19 7.5' : 'M6.5 6.5l11 11M17.5 6.5l-11 11'}"/></svg></span>
+      <span class="m-prozent">0 %</span><span class="m-richtig">${esc(f(LE.richtig, { richtig: r, gesamt: n }))}</span>`;
+    $('le-karte').innerHTML = `
+      <span class="pille-kicker ohne">${esc(f(LE.kicker, { n: l + 1, gesamt: LV.length }))}</span>${punkte(l)}
+      <h1>${esc(titel)}</h1>
+      ${messer(n ? r / n : 0, mitte)}
+      <div class="le-kacheln">${erg.map((e, k) => `<span class="le-kachel ${istRichtig(e) ? 'ja' : 'nein'}" style="--i:${k}" title="${esc(anrufe[k].storyTitel)}">${istRichtig(e) ? HAKEN : KREUZ}</span>`).join('')}</div>
+      <div class="le-beute ${beute ? '' : 'null'}"><img src="assets/hacker-face.png" alt=""><span><small>${esc(LE.beute)}</small><b>${beute ? euro(beute) : esc(LE.beuteNull)}</b></span></div>
+      <details class="le-details"><summary><svg class="ico" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>${esc(LE.details)}</summary>
+        <ol class="le-liste">${anrufe.map((a, k) => `<li class="${istRichtig(erg[k]) ? 'ja' : 'nein'}">${istRichtig(erg[k]) ? HAKEN : KREUZ}<span class="le-titel">${esc(a.storyTitel)}</span>
+          <span class="tag ${a.echt ? 'tag-echt' : 'tag-fake'}">${esc(a.echt ? LE.warEcht : LE.warFake)}</span></li>`).join('')}</ol></details>
+      <div class="le-fuss allein"><button class="btn btn-gross btn-mint" id="le-weiter" type="button">${esc(weiterText)} ${PFEIL}</button></div>`;
+    zeige('s-levelende');
+    K.musik('intro', 0.3, 1.5);
+    messerStarten($('le-karte'));
+    setTimeout(() => (gut ? K.fx.richtig : K.fx.falsch)(), reduziert ? 0 : 300);
+    if (!beute) setTimeout(() => konfetti(perfekt ? 120 : 80, 'cct'), reduziert ? 0 : 1500);
+    $('le-weiter').addEventListener('click', () => {
+      K.fx.klick();
+      if (letztes) ende();
+      else if (l === 0 && !S.pauseFertig) pauseZeigen();
+      else levelIntro(l + 1);
+    });
+    setTimeout(() => { const b = $('le-weiter'); if (b) b.focus({ preventScroll: true }); }, 900);
+  }
+
+  /* ================= Pause ================= */
+  function pauseZeigen() {
+    ++S.epoche;
+    zeige('s-pause');
+    K.musik('intro', 0.3, 2);
+    const P = C.pause;
+    $('pause-kicker').textContent = P.kicker; $('pause-titel').textContent = P.titel;
+    $('pause-szene').textContent = P.szene; $('pause-frage').textContent = P.frage;
+    $('pause-antwort').hidden = true; $('pause-regel').hidden = true; $('pause-weiter').hidden = true;
+    S.pause = null;
+    $('pause-optionen').innerHTML = P.optionen.map((o, i) =>
+      `<button class="option pause-option" type="button" data-i="${i}" style="--i:${i};--farbe:${o.farbe || 'var(--lilac)'}"><span class="p-icon">${icon(o.icon)}</span><span class="p-text">${esc(o.text)}</span><kbd>${String.fromCharCode(65 + i)}</kbd></button>`).join('');
+    $('pause-optionen').querySelectorAll('button').forEach(b => b.addEventListener('click', () => pauseWaehlen(+b.dataset.i)));
+  }
+  function pauseWaehlen(i) {
+    if (S.pause != null) return;
+    const P = C.pause, o = P.optionen[i];
+    S.pause = o.wert;
+    $('pause-optionen').querySelectorAll('button').forEach((b, k) => {
+      b.disabled = true;
+      b.classList.add(k === i ? 'gewaehlt' : 'nicht');
+      if (P.optionen[k].wert === 'voll') b.classList.add('loesung');
+      b.dataset.wert = P.optionen[k].wert;
+    });
+    (o.wert === 'voll' ? K.fx.richtig : o.wert === 'halb' ? K.fx.wahl : K.fx.falsch)();
+    const an = $('pause-antwort'); an.dataset.wert = o.wert;
+    $('pause-antwort-titel').textContent = o.titel; $('pause-antwort-text').textContent = o.erklaerung;
+    an.hidden = false;
+    $('pause-regel-titel').textContent = P.regel.titel;
+    $('pause-regel-punkte').innerHTML = P.regel.punkte.map((r, k) => `<li style="--i:${k}">${icon(r.icon)}<div><b>${r.titel}</b><span>${r.text}</span></div></li>`).join('');
+    setTimeout(() => {
+      $('pause-regel').hidden = false; $('pause-weiter').hidden = false; $('pause-weiter').innerHTML = esc(P.knopf) + ' ' + PFEIL;
+      scrollZu($('s-pause'), $('pause-weiter'));
+    }, 500);
+  }
+  $('pause-weiter').addEventListener('click', () => {
+    K.fx.klick(); S.pauseFertig = true;
+    levelIntro(1);
+  });
+
+  /* ================= Auswertung (wie das Ergebnis der Serie) ================= */
+  function ende() {
+    ++S.epoche;
+    const A = C.auswertung, N = C.anrufe.length;
+    const erg = S.ergebnisse;
+    const richtig = C.anrufe.filter((a, i) => istRichtig(erg[i])).length;
+    const gut = erg.filter(Boolean).reduce((x, e) => x + (e.gut || 0), 0);
+    const rang = A.raenge.find(r => richtig >= r.ab);
+    const hackerText = richtig >= N - 1 && !S.beute ? A.hackerGut : (richtig >= N - 2 ? A.hackerMittel : A.hackerSchlecht);
+    const mitte = `<span class="m-prozent">0 %</span><span class="m-richtig">${richtig}/${N} ${esc(A.richtig)}</span>`;
+    const akte = C.anrufe.map((a, i) => {
+      const e = erg[i] || {};
+      const st = !a.echt ? (e.zuSpaet ? 'zuSpaet' : e.richtig ? 'entlarvt' : 'getaeuscht') : (e.richtig ? 'echtErkannt' : 'fehlalarm');
+      return `<li class="akte-${st}" style="--i:${i}"><span class="akte-nr">${i + 1}</span><div><b>${esc(a.storyTitel)}</b><span>${C.hud.level} ${levelVon(i) + 1} · ${a.echt ? 'Echt' : 'KI-Fake'} · ${esc(a.anrufer.name)}</span></div><em>${C.feedback[st].stempel}</em></li>`;
+    }).join('');
+    $('finale').innerHTML = `
+      <div class="f-kopf">
+        ${messer(richtig / N, mitte)}
+        <div class="f-kopf-text">
+          <span class="pille-kicker">${esc(A.titel)}</span>
+          <h1 class="titel-gross">${esc(rang.titel)}</h1>
+          <p class="lead">${esc(rang.text)}</p>
+          <div class="f-zahlen">
+            <div class="f-beute ${S.beute ? '' : 'null'}"><img src="assets/hacker-face.png" alt=""><span><b id="ende-beute">0 €</b><small>${esc(S.beute ? A.beuteVoll : A.beuteNull)}</small></span></div>
+            <div class="f-nachgehakt"><b>${gut}×</b><small>${esc(A.nachgehakt)}</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="hacker-sagt" id="ende-hacker" data-stimmung="${S.beute ? 'froh' : 'sauer'}"><img src="assets/hacker.png" alt=""><p id="ende-hacker-text"></p></div>
+      <div class="f-raster">
+        <section class="f-block karte"><h2>${esc(A.akte)}</h2><ol class="akte">${akte}</ol></section>
+        <section class="f-block karte"><h2>${esc(A.regelnTitel)}</h2><ol class="regeln">${A.regeln.map((r, i) => `<li style="--i:${i}"><b>${esc(r.titel)}</b><span>${esc(r.text)}</span></li>`).join('')}</ol></section>
+      </div>
+      <button class="btn btn-gross btn-mint" id="ende-nochmal" type="button">${NOCHMAL}${esc(A.nochmal)}</button>
+      <p class="quellen">${esc(A.quellen)}</p>
+      <p class="quellen">${esc(A.kleingedruckt)}</p>`;
+    zeige('s-ende');
+    K.musik('auswertung', 0.45, 2);
+    messerStarten($('finale'));
+    zaehle($('ende-beute'), S.beute, euro, 1600);
+    setTimeout(() => tippe($('ende-hacker-text'), hackerText, 26, true), reduziert ? 0 : 900);
+    if (!reduziert) C.anrufe.forEach((a, i) => setTimeout(() => K.fx.pop(i), 700 + i * 160));
+    setTimeout(() => (richtig >= N - 2 ? K.fx.richtig : K.fx.stempel)(), reduziert ? 0 : 500);
+    if (!S.beute) setTimeout(() => konfetti(140, 'bunt'), reduziert ? 0 : 1300);
+    $('ende-nochmal').addEventListener('click', () => { K.fx.klick(); neuesSpiel(); levelIntro(0); });
+  }
+
+  /* ================= Lage-Umschalter (schmal) ================= */
+  $('lage-toggle').addEventListener('click', () => {
+    const l = $('lage'); l.classList.toggle('zu');
+    $('lage-toggle').setAttribute('aria-expanded', !l.classList.contains('zu'));
+  });
+
+  /* ================= Tastatur ================= */
+  addEventListener('keydown', e => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const scr = app.dataset.screen;
+    if (scr === 's-spiel') {
+      if (!$('urteil').hidden) {
+        if (e.key === 'ArrowLeft') urteilen('echt');
+        if (e.key === 'ArrowRight') urteilen('fake');
+        return;
+      }
+      if (!$('feedback').hidden) return;
+      const z = geraet.dataset.zustand;
+      if (z === 'ring' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); annehmen(); }
+      if (z === 'talk' && e.key === 'Escape') beenden('aufgelegt');
+      if (z === 'talk' && !$('wahl').hidden && (e.key === '1' || e.key === '2')) waehlen(+e.key - 1);
+    }
+    if (scr === 's-level' && e.key === 'Enter' && document.activeElement !== $('lv-los')) { e.preventDefault(); $('lv-los').click(); }
+    if (scr === 's-pause' && S.pause == null) {
+      const k = 'abcd'.indexOf(e.key.toLowerCase()); if (k >= 0) pauseWaehlen(k);
+    }
+  });
+
+  /* ================= Start ================= */
+  startAufbauen();
+  zeige('s-start');
+
+  // Testsprünge: #intro, #l1, #l2, #anruf1 … #anruf6, #e1, #e2, #pause, #ende
+  const sprung = location.hash.slice(1);
+  if (sprung) {
+    const testErgebnisse = () => C.anrufe.forEach((a, i) => {
+      const richtig = i !== 1;
+      S.ergebnisse[i] = { richtig, zuSpaet: false, gut: i % 2 ? 1 : 2, beute: !a.echt && !richtig ? a.beute : 0, zuege: [], pfad: [] };
+    });
+    const los = () => {
+      K.init();
+      neuesSpiel();
+      const m = /^anruf([1-9])$/.exec(sprung), l = /^l([1-9])$/.exec(sprung), e = /^e([1-9])$/.exec(sprung);
+      if (m) {
+        const n = Math.min(+m[1] - 1, C.anrufe.length - 1);
+        S.pauseFertig = levelVon(n) > 0;
+        hudAufbauen(); anrufStarten(n);
+      } else if (l) { S.pauseFertig = +l[1] > 1; levelIntro(Math.min(+l[1] - 1, LV.length - 1)); }
+      else if (e) { testErgebnisse(); S.beute = S.ergebnisse.reduce((x, r) => x + r.beute, 0); levelEnde(Math.min(+e[1] - 1, LV.length - 1)); }
+      else if (sprung === 'intro') { K.musik('intro', 0.55, 1.2); intro(); }
+      else if (sprung === 'pause') pauseZeigen();
+      else if (sprung === 'ende') { testErgebnisse(); S.beute = S.ergebnisse.reduce((x, r) => x + r.beute, 0); ende(); }
+    };
+    $('start-los').innerHTML = 'Test: ' + esc(sprung);
+    $('start-los').addEventListener('click', ev => { ev.stopImmediatePropagation(); los(); }, { capture: true });
+  }
+})();
